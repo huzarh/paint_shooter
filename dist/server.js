@@ -60,8 +60,22 @@ app.use((req, res, next) => {
     next();
 });
 
-// Add JSON parsing middleware
-app.use(express.json());
+// Add JSON parsing middleware with better error handling
+app.use(express.json({
+    verify: (req, res, buf, encoding) => {
+        try {
+            JSON.parse(buf);
+        } catch (e) {
+            res.status(400).json({
+                success: false,
+                error: 'Invalid JSON',
+                details: 'The request body contains invalid JSON',
+                position: e.message
+            });
+            throw new Error('Invalid JSON');
+        }
+    }
+}));
 
 // Add static file serving for the output directory
 const outputDir = path.join(__dirname, '../output');
@@ -114,73 +128,190 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         if (!imageUrl) {
             res.status(400).json({ 
                 success: false, 
-                error: 'No image URL provided',
-                details: 'Please provide an image URL in the request body'
+                error: 'No image URL or path provided',
+                details: 'Please provide an image URL or local file path in the request body'
             });
             return;
         }
 
-        console.log('Processing image from URL:', imageUrl);
+        console.log('Processing image from:', imageUrl);
 
-        // Download image from URL
-        let response;
-        try {
-            response = yield axios({
-                method: 'GET',
-                url: imageUrl,
-                responseType: 'arraybuffer',
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Connection': 'keep-alive'
-                },
-                maxRedirects: 5,
-                validateStatus: function (status) {
-                    return status >= 200 && status < 300;
+        let imageBuffer;
+        // Check if the input is a local file path
+        if (fs.existsSync(imageUrl)) {
+            try {
+                imageBuffer = fs.readFileSync(imageUrl);
+            } catch (error) {
+                throw new Error(`Failed to read local file: ${error.message}`);
+            }
+        } else {
+            // Check if it's a Telegram API URL
+            const telegramMatch = imageUrl.match(/api\.telegram\.org\/bot([^\/]+)\/(?:photos|file)\/([^\/]+)/);
+            if (telegramMatch) {
+                try {
+                    // First get the file path using getFile
+                    const botToken = telegramMatch[1];
+                    const fileId = telegramMatch[2];
+                    
+                    // Try to get file info from Telegram
+                    const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile`;
+                    console.log('Getting file info from Telegram for file_id:', fileId);
+                    
+                    const fileResponse = yield axios.post(getFileUrl, {
+                        file_id: fileId
+                    });
+
+                    if (!fileResponse.data.ok) {
+                        console.error('Telegram API error response:', fileResponse.data);
+                        throw new Error(`Telegram API error: ${fileResponse.data.description || 'Unknown error'}`);
+                    }
+
+                    const filePath = fileResponse.data.result.file_path;
+                    if (!filePath) {
+                        throw new Error('No file path returned from Telegram');
+                    }
+
+                    // Download the file using the file path
+                    const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+                    console.log('Downloading from Telegram URL:', downloadUrl);
+
+                    const response = yield axios({
+                        method: 'GET',
+                        url: downloadUrl,
+                        responseType: 'arraybuffer',
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                            'Accept-Encoding': 'gzip, deflate, br',
+                            'Connection': 'keep-alive'
+                        },
+                        maxRedirects: 5,
+                        validateStatus: function (status) {
+                            return status >= 200 && status < 300;
+                        }
+                    });
+
+                    // Verify that we got image data
+                    if (!response.data || response.data.length === 0) {
+                        throw new Error('No image data received from Telegram');
+                    }
+
+                    imageBuffer = response.data;
+                    console.log('Successfully downloaded image from Telegram');
+                } catch (error) {
+                    console.error('Error downloading from Telegram:', error.message);
+                    if (error.response) {
+                        console.error('Telegram API response:', error.response.data);
+                    }
+                    throw new Error(`Failed to download from Telegram: ${error.message}`);
                 }
-            });
-        } catch (error) {
-            console.error('Error downloading image:', error.message);
-            throw new Error(`Failed to download image: ${error.message}`);
+            } else {
+                // Regular URL download
+                try {
+                    const response = yield axios({
+                        method: 'GET',
+                        url: imageUrl,
+                        responseType: 'arraybuffer',
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                            'Accept-Encoding': 'gzip, deflate, br',
+                            'Connection': 'keep-alive'
+                        },
+                        maxRedirects: 5,
+                        validateStatus: function (status) {
+                            return status >= 200 && status < 300;
+                        }
+                    });
+                    imageBuffer = response.data;
+                } catch (error) {
+                    console.error('Error downloading image:', error.message);
+                    throw new Error(`Failed to download image: ${error.message}`);
+                }
+            }
         }
 
-        // Save the downloaded image
+        // Save the image
         const imageNumber = getNextFileNumber('in-', '.png');
         const imagePath = path.join(inputDir, `in-${imageNumber}.png`);
         
         try {
-            fs.writeFileSync(imagePath, response.data);
+            fs.writeFileSync(imagePath, imageBuffer);
         } catch (error) {
             console.error('Error saving image:', error.message);
             throw new Error(`Failed to save image: ${error.message}`);
         }
 
-        // Create settings with default values
-        const settings = new settings_1.Settings();
-        settings.kMeansNrOfClusters = 16;
-        settings.kMeansMinDeltaDifference = 1;
-        settings.removeFacetsSmallerThanNrOfPoints = 20;
-        settings.maximumNumberOfFacets = 100000;
-        settings.nrOfTimesToHalveBorderSegments = 2;
-        settings.narrowPixelStripCleanupRuns = 3;
-
         // Load and process the image
         const image = yield (0, canvas_1.loadImage)(imagePath);
-        const canvas = (0, canvas_1.createCanvas)(image.width, image.height);
+        
+        // Check image size and resize if necessary
+        const MAX_DIMENSION = 1000; // Reduced from 1500 to 1000
+        const MAX_PIXELS = 100000; // Maximum total pixels (1000x1000)
+        let finalWidth = image.width;
+        let finalHeight = image.height;
+        let wasResized = false;
+
+        // Calculate total pixels
+        const totalPixels = image.width * image.height;
+        
+        if (totalPixels > MAX_PIXELS) {
+            wasResized = true;
+            const scale = Math.sqrt(MAX_PIXELS / totalPixels);
+            finalWidth = Math.round(image.width * scale);
+            finalHeight = Math.round(image.height * scale);
+        } else if (image.width > MAX_DIMENSION || image.height > MAX_DIMENSION) {
+            wasResized = true;
+            if (image.width > image.height) {
+                finalWidth = MAX_DIMENSION;
+                finalHeight = Math.round((image.height * MAX_DIMENSION) / image.width);
+            } else {
+                finalHeight = MAX_DIMENSION;
+                finalWidth = Math.round((image.width * MAX_DIMENSION) / image.height);
+            }
+        }
+
+        // Create settings with optimized values for large images
+        const settings = new settings_1.Settings();
+        if (totalPixels > 500000) { // If image is large
+            settings.kMeansNrOfClusters = 12; // Reduced from 16
+            settings.removeFacetsSmallerThanNrOfPoints = 30; // Increased from 20
+            settings.maximumNumberOfFacets = 50000; // Reduced from 100000
+            settings.nrOfTimesToHalveBorderSegments = 3; // Increased from 2
+            settings.narrowPixelStripCleanupRuns = 2; // Reduced from 3
+        } else {
+            settings.kMeansNrOfClusters = 16;
+            settings.removeFacetsSmallerThanNrOfPoints = 20;
+            settings.maximumNumberOfFacets = 100000;
+            settings.nrOfTimesToHalveBorderSegments = 2;
+            settings.narrowPixelStripCleanupRuns = 3;
+        }
+
+        const canvas = (0, canvas_1.createCanvas)(finalWidth, finalHeight);
         const ctx = canvas.getContext('2d');
         if (!ctx) {
             throw new Error('Could not get canvas context');
         }
-        ctx.drawImage(image, 0, 0);
+
+        // Draw image with potential resizing
+        ctx.drawImage(image, 0, 0, finalWidth, finalHeight);
 
         // Process the image
         const cancellationToken = new common_1.CancellationToken();
         const result = yield guiprocessmanager_1.GUIProcessManager.process(settings, cancellationToken, canvas, ctx);
 
-        // Generate SVG
-        const svg = yield guiprocessmanager_1.GUIProcessManager.createSVG(result.facetResult, result.colorsByIndex, 3,
-            true, true, true, 50, "black", null);
+        // Generate SVG with optimized settings
+        const svg = yield guiprocessmanager_1.GUIProcessManager.createSVG(
+            result.facetResult, 
+            result.colorsByIndex, 
+            3, // sizeMultiplier
+            true, // fill
+            true, // stroke
+            true, // addColorLabels
+            Math.max(30, Math.min(50, Math.round(finalWidth / 20))), // Dynamic font size based on image width
+            "black", // fontColor
+            null // onUpdate
+        );
 
         // Save SVG with sequential number
         const svgPath = path.join(outputDir, `out-${imageNumber}.svg`);
@@ -188,17 +319,17 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         fs.writeFileSync(svgPath, svgContent);
 
         // Convert SVG to PNG and save
-        const svgCanvas = (0, canvas_1.createCanvas)(image.width, image.height);
+        const svgCanvas = (0, canvas_1.createCanvas)(finalWidth, finalHeight);
         const svgCtx = svgCanvas.getContext('2d');
         
         // Add viewBox to SVG if not present
         let modifiedSvg = svgContent;
         if (!modifiedSvg.includes('viewBox')) {
-            modifiedSvg = modifiedSvg.replace('<svg', `<svg viewBox="0 0 ${image.width} ${image.height}"`);
+            modifiedSvg = modifiedSvg.replace('<svg', `<svg viewBox="0 0 ${finalWidth} ${finalHeight}"`);
         }
         
         const svgImage = yield (0, canvas_1.loadImage)(`data:image/svg+xml;base64,${Buffer.from(modifiedSvg).toString('base64')}`);
-        svgCtx.drawImage(svgImage, 0, 0, image.width, image.height);
+        svgCtx.drawImage(svgImage, 0, 0, finalWidth, finalHeight);
         const pngBuffer = svgCanvas.toBuffer('image/png');
         const pngPath = path.join(outputDir, `out-${imageNumber}.png`);
         fs.writeFileSync(pngPath, pngBuffer);
@@ -215,13 +346,19 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
                 outputPngPath: `/output/out-${imageNumber}.png`,
                 timestamp: new Date().toISOString(),
                 imageSize: {
-                    width: image.width,
-                    height: image.height
+                    originalWidth: image.width,
+                    originalHeight: image.height,
+                    finalWidth: finalWidth,
+                    finalHeight: finalHeight,
+                    wasResized: wasResized,
+                    totalPixels: totalPixels,
+                    finalPixels: finalWidth * finalHeight
                 },
                 processingInfo: {
                     kMeansClusters: settings.kMeansNrOfClusters,
                     maxFacets: settings.maximumNumberOfFacets,
-                    processingTime: new Date().toISOString()
+                    processingTime: new Date().toISOString(),
+                    optimizationLevel: totalPixels > 500000 ? 'high' : 'normal'
                 }
             }
         });
