@@ -246,8 +246,8 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         const image = yield (0, canvas_1.loadImage)(imagePath);
         
         // Check image size and resize if necessary
-        const MAX_DIMENSION = 1000; // Reduced from 1500 to 1000
-        const MAX_PIXELS = 100000; // Maximum total pixels (1000x1000)
+        const MAX_DIMENSION = 1500; // Reduced from 1500 to 1000
+        const MAX_PIXELS = 1000000; // Maximum total pixels (1000x1000)
         let finalWidth = image.width;
         let finalHeight = image.height;
         let wasResized = false;
@@ -275,16 +275,16 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         const settings = new settings_1.Settings();
         if (totalPixels > 500000) { // If image is large
             settings.kMeansNrOfClusters = 12; // Reduced from 16
-            settings.removeFacetsSmallerThanNrOfPoints = 30; // Increased from 20
+            settings.removeFacetsSmallerThanNrOfPoints = 25; // Increased from 20
             settings.maximumNumberOfFacets = 50000; // Reduced from 100000
             settings.nrOfTimesToHalveBorderSegments = 3; // Increased from 2
-            settings.narrowPixelStripCleanupRuns = 2; // Reduced from 3
+            settings.narrowPixelStripCleanupRuns = 20; // Reduced from 3
         } else {
-            settings.kMeansNrOfClusters = 16;
-            settings.removeFacetsSmallerThanNrOfPoints = 20;
+            settings.kMeansNrOfClusters = 12;
+            settings.removeFacetsSmallerThanNrOfPoints = 10;
             settings.maximumNumberOfFacets = 100000;
             settings.nrOfTimesToHalveBorderSegments = 2;
-            settings.narrowPixelStripCleanupRuns = 3;
+            settings.narrowPixelStripCleanupRuns = 5;
         }
 
         const canvas = (0, canvas_1.createCanvas)(finalWidth, finalHeight);
