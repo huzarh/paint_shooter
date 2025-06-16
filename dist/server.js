@@ -61,26 +61,42 @@ app.use((req, res, next) => {
 
 // Add static file serving for the output directory
 const outputDir = path.join(__dirname, '../output');
+const inputDir = path.join(__dirname, '../input');
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
 }
+if (!fs.existsSync(inputDir)) {
+    fs.mkdirSync(inputDir, { recursive: true });
+}
 app.use('/output', express.static(outputDir));
+app.use('/input', express.static(inputDir));
 
 // Configure multer for handling file uploads
 const upload = multer({
     storage: multer.diskStorage({
         destination: function (req, file, cb) {
-            const uploadDir = path.join(__dirname, '../uploads');
-            if (!fs.existsSync(uploadDir)) {
-                fs.mkdirSync(uploadDir, { recursive: true });
-            }
-            cb(null, uploadDir);
+            cb(null, inputDir);
         },
         filename: function (req, file, cb) {
-            cb(null, Date.now() + path.extname(file.originalname));
+            const nextNumber = getNextFileNumber('in-', '.png');
+            cb(null, `in-${nextNumber}.png`);
         }
     })
 });
+
+// Function to get next available file number
+function getNextFileNumber(prefix, extension) {
+    const dir = prefix.startsWith('in-') ? inputDir : outputDir;
+    const files = fs.readdirSync(dir);
+    const matchingFiles = files.filter(file => file.startsWith(prefix) && file.endsWith(extension));
+    if (matchingFiles.length === 0) return 1;
+    
+    const numbers = matchingFiles.map(file => {
+        const num = parseInt(file.replace(prefix, '').replace(extension, ''));
+        return isNaN(num) ? 0 : num;
+    });
+    return Math.max(...numbers) + 1;
+}
 
 // Create a temporary directory for processing
 const tempDir = path.join(__dirname, '../temp');
@@ -104,7 +120,11 @@ function getNextSvgNumber() {
 const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         if (!req.file) {
-            res.status(400).json({ error: 'No image file provided' });
+            res.status(400).json({ 
+                success: false, 
+                error: 'No image file provided',
+                details: 'Please upload an image file'
+            });
             return;
         }
         console.log('Received file:', req.file.originalname);
@@ -132,30 +152,45 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
             true, true, true, 50, "black", null);
 
         // Save SVG with sequential number
-        const svgNumber = getNextSvgNumber();
+        const svgNumber = getNextFileNumber('out-', '.svg');
         const svgPath = path.join(outputDir, `out-${svgNumber}.svg`);
         fs.writeFileSync(svgPath, typeof svg === 'string' ? svg : svg.outerHTML);
 
-        // Clean up the uploaded file
-        fs.unlinkSync(req.file.path);
-
-        // Send success response with the file number
+        // Send success response with the file numbers
         res.json({ 
             success: true, 
             message: 'SVG generated successfully',
-            fileNumber: svgNumber
+            inputFile: `in-${svgNumber}.png`,
+            outputFile: `out-${svgNumber}.svg`,
+            details: {
+                inputPath: `/input/in-${svgNumber}.png`,
+                outputPath: `/output/out-${svgNumber}.svg`,
+                timestamp: new Date().toISOString()
+            }
         });
     }
     catch (error) {
         console.error('Error processing image:', error);
-        res.status(500).json({ error: 'Error processing image' });
+        res.status(500).json({ 
+            success: false, 
+            error: 'Error processing image',
+            details: error.message || 'An unexpected error occurred during image processing'
+        });
     }
 });
 
 // Add GET endpoint to list SVGs
 app.get('/', (req, res) => {
-    const files = fs.readdirSync(outputDir);
-    const svgFiles = files.filter(file => file.startsWith('out-') && file.endsWith('.svg'))
+    const inputFiles = fs.readdirSync(inputDir)
+        .filter(file => file.startsWith('in-') && file.endsWith('.png'))
+        .sort((a, b) => {
+            const numA = parseInt(a.replace('in-', '').replace('.png', ''));
+            const numB = parseInt(b.replace('in-', '').replace('.png', ''));
+            return numA - numB;
+        });
+
+    const outputFiles = fs.readdirSync(outputDir)
+        .filter(file => file.startsWith('out-') && file.endsWith('.svg'))
         .sort((a, b) => {
             const numA = parseInt(a.replace('out-', '').replace('.svg', ''));
             const numB = parseInt(b.replace('out-', '').replace('.svg', ''));
@@ -166,22 +201,60 @@ app.get('/', (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Generated SVGs</title>
+            <title>Image Conversion Results</title>
             <style>
                 body { font-family: Arial, sans-serif; margin: 20px; }
-                .svg-container { margin: 20px 0; }
-                .svg-container img { max-width: 100%; border: 1px solid #ccc; }
+                .comparison-container { 
+                    margin: 20px 0;
+                    padding: 20px;
+                    border: 1px solid #ccc;
+                    border-radius: 5px;
+                }
+                .image-pair {
+                    display: flex;
+                    gap: 20px;
+                    margin-bottom: 20px;
+                }
+                .image-container {
+                    flex: 1;
+                }
+                .image-container img { 
+                    max-width: 100%;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                }
                 h1 { color: #333; }
+                h2 { color: #666; margin-bottom: 10px; }
+                .file-name {
+                    font-size: 0.9em;
+                    color: #666;
+                    margin-top: 5px;
+                }
             </style>
         </head>
         <body>
-            <h1>Generated SVGs</h1>
-            ${svgFiles.map(file => `
-                <div class="svg-container">
-                    <h2>${file}</h2>
-                    <img src="/output/${file}" alt="${file}">
-                </div>
-            `).join('')}
+            <h1>Image Conversion Results</h1>
+            ${inputFiles.map((inputFile, index) => {
+                const outputFile = outputFiles[index];
+                if (!outputFile) return '';
+                return `
+                    <div class="comparison-container">
+                        <h2>Conversion #${index + 1}</h2>
+                        <div class="image-pair">
+                            <div class="image-container">
+                                <h3>Input Image</h3>
+                                <img src="/input/${inputFile}" alt="${inputFile}">
+                                <div class="file-name">${inputFile}</div>
+                            </div>
+                            <div class="image-container">
+                                <h3>Output SVG</h3>
+                                <img src="/output/${outputFile}" alt="${outputFile}">
+                                <div class="file-name">${outputFile}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
         </body>
         </html>
     `;
