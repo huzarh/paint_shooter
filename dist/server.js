@@ -123,32 +123,38 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         console.log('Processing image from URL:', imageUrl);
 
         // Download image from URL
-        const response = yield axios({
-            method: 'GET',
-            url: imageUrl,
-            responseType: 'arraybuffer',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            },
-            maxRedirects: 5,
-            validateStatus: function (status) {
-                return status >= 200 && status < 300; // Accept all 2xx status codes
-            }
-        });
-
-        // Check if the response is actually an image
-        const contentType = response.headers['content-type'];
-        if (!contentType || !contentType.startsWith('image/')) {
-            throw new Error('URL does not point to a valid image');
+        let response;
+        try {
+            response = yield axios({
+                method: 'GET',
+                url: imageUrl,
+                responseType: 'arraybuffer',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive'
+                },
+                maxRedirects: 5,
+                validateStatus: function (status) {
+                    return status >= 200 && status < 300;
+                }
+            });
+        } catch (error) {
+            console.error('Error downloading image:', error.message);
+            throw new Error(`Failed to download image: ${error.message}`);
         }
 
         // Save the downloaded image
         const imageNumber = getNextFileNumber('in-', '.png');
         const imagePath = path.join(inputDir, `in-${imageNumber}.png`);
-        fs.writeFileSync(imagePath, response.data);
+        
+        try {
+            fs.writeFileSync(imagePath, response.data);
+        } catch (error) {
+            console.error('Error saving image:', error.message);
+            throw new Error(`Failed to save image: ${error.message}`);
+        }
 
         // Create settings with default values
         const settings = new settings_1.Settings();
@@ -207,7 +213,16 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
                 inputPath: `/input/in-${imageNumber}.png`,
                 outputPath: `/output/out-${imageNumber}.svg`,
                 outputPngPath: `/output/out-${imageNumber}.png`,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                imageSize: {
+                    width: image.width,
+                    height: image.height
+                },
+                processingInfo: {
+                    kMeansClusters: settings.kMeansNrOfClusters,
+                    maxFacets: settings.maximumNumberOfFacets,
+                    processingTime: new Date().toISOString()
+                }
             }
         });
     }
@@ -216,92 +231,119 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         res.status(500).json({ 
             success: false, 
             error: 'Error processing image',
-            details: error.message || 'An unexpected error occurred during image processing'
+            details: error.message || 'An unexpected error occurred during image processing',
+            timestamp: new Date().toISOString(),
+            errorType: error.name || 'UnknownError',
+            errorStack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 });
 
 // Add GET endpoint to list SVGs
 app.get('/', (req, res) => {
-    const inputFiles = fs.readdirSync(inputDir)
-        .filter(file => file.startsWith('in-') && file.endsWith('.png'))
-        .sort((a, b) => {
-            const numA = parseInt(a.replace('in-', '').replace('.png', ''));
-            const numB = parseInt(b.replace('in-', '').replace('.png', ''));
-            return numA - numB;
-        });
+    try {
+        const inputFiles = fs.readdirSync(inputDir)
+            .filter(file => file.startsWith('in-') && file.endsWith('.png'))
+            .sort((a, b) => {
+                const numA = parseInt(a.replace('in-', '').replace('.png', ''));
+                const numB = parseInt(b.replace('in-', '').replace('.png', ''));
+                return numA - numB;
+            });
 
-    const outputFiles = fs.readdirSync(outputDir)
-        .filter(file => file.startsWith('out-') && file.endsWith('.svg'))
-        .sort((a, b) => {
-            const numA = parseInt(a.replace('out-', '').replace('.svg', ''));
-            const numB = parseInt(b.replace('out-', '').replace('.svg', ''));
-            return numA - numB;
-        });
+        const outputFiles = fs.readdirSync(outputDir)
+            .filter(file => file.startsWith('out-') && file.endsWith('.svg'))
+            .sort((a, b) => {
+                const numA = parseInt(a.replace('out-', '').replace('.svg', ''));
+                const numB = parseInt(b.replace('out-', '').replace('.svg', ''));
+                return numA - numB;
+            });
 
-    const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Image Conversion Results</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                .comparison-container { 
-                    margin: 20px 0;
-                    padding: 20px;
-                    border: 1px solid #ccc;
-                    border-radius: 5px;
-                }
-                .image-pair {
-                    display: flex;
-                    gap: 20px;
-                    margin-bottom: 20px;
-                }
-                .image-container {
-                    flex: 1;
-                }
-                .image-container img { 
-                    max-width: 100%;
-                    border: 1px solid #ddd;
-                    border-radius: 4px;
-                }
-                h1 { color: #333; }
-                h2 { color: #666; margin-bottom: 10px; }
-                .file-name {
-                    font-size: 0.9em;
-                    color: #666;
-                    margin-top: 5px;
-                }
-            </style>
-        </head>
-        <body>
-            <h1>Image Conversion Results</h1>
-            ${inputFiles.map((inputFile, index) => {
-                const outputFile = outputFiles[index];
-                if (!outputFile) return '';
-                return `
-                    <div class="comparison-container">
-                        <h2>Conversion #${index + 1}</h2>
-                        <div class="image-pair">
-                            <div class="image-container">
-                                <h3>Input Image</h3>
-                                <img src="/input/${inputFile}" alt="${inputFile}">
-                                <div class="file-name">${inputFile}</div>
-                            </div>
-                            <div class="image-container">
-                                <h3>Output SVG</h3>
-                                <img src="/output/${outputFile}" alt="${outputFile}">
-                                <div class="file-name">${outputFile}</div>
+        const html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Image Conversion Results</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .comparison-container { 
+                        margin: 20px 0;
+                        padding: 20px;
+                        border: 1px solid #ccc;
+                        border-radius: 5px;
+                    }
+                    .image-pair {
+                        display: flex;
+                        gap: 20px;
+                        margin-bottom: 20px;
+                    }
+                    .image-container {
+                        flex: 1;
+                    }
+                    .image-container img { 
+                        max-width: 100%;
+                        border: 1px solid #ddd;
+                        border-radius: 4px;
+                    }
+                    h1 { color: #333; }
+                    h2 { color: #666; margin-bottom: 10px; }
+                    .file-name {
+                        font-size: 0.9em;
+                        color: #666;
+                        margin-top: 5px;
+                    }
+                    .status {
+                        padding: 5px 10px;
+                        border-radius: 3px;
+                        font-size: 0.9em;
+                        margin-left: 10px;
+                    }
+                    .status.success {
+                        background-color: #d4edda;
+                        color: #155724;
+                    }
+                    .status.error {
+                        background-color: #f8d7da;
+                        color: #721c24;
+                    }
+                </style>
+            </head>
+            <body>
+                <h1>Image Conversion Results</h1>
+                ${inputFiles.map((inputFile, index) => {
+                    const outputFile = outputFiles[index];
+                    if (!outputFile) return '';
+                    return `
+                        <div class="comparison-container">
+                            <h2>Conversion #${index + 1} <span class="status success">Success</span></h2>
+                            <div class="image-pair">
+                                <div class="image-container">
+                                    <h3>Input Image</h3>
+                                    <img src="/input/${inputFile}" alt="${inputFile}">
+                                    <div class="file-name">${inputFile}</div>
+                                </div>
+                                <div class="image-container">
+                                    <h3>Output SVG</h3>
+                                    <img src="/output/${outputFile}" alt="${outputFile}">
+                                    <div class="file-name">${outputFile}</div>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                `;
-            }).join('')}
-        </body>
-        </html>
-    `;
+                    `;
+                }).join('')}
+            </body>
+            </html>
+        `;
 
-    res.send(html);
+        res.send(html);
+    } catch (error) {
+        console.error('Error generating page:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Error generating results page',
+            details: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 app.post('/convert', convertHandler);
