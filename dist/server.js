@@ -51,7 +51,7 @@ const common_1 = require("./common");
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const app = express();
-const port = 3000;
+const port = 8000;
 // Configure multer for handling file uploads
 const upload = multer({
     storage: multer.diskStorage({
