@@ -162,7 +162,24 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
 
         // Save SVG with sequential number
         const svgPath = path.join(outputDir, `out-${imageNumber}.svg`);
-        fs.writeFileSync(svgPath, typeof svg === 'string' ? svg : svg.outerHTML);
+        const svgContent = typeof svg === 'string' ? svg : svg.outerHTML;
+        fs.writeFileSync(svgPath, svgContent);
+
+        // Convert SVG to PNG and save
+        const svgCanvas = (0, canvas_1.createCanvas)(image.width, image.height);
+        const svgCtx = svgCanvas.getContext('2d');
+        
+        // Add viewBox to SVG if not present
+        let modifiedSvg = svgContent;
+        if (!modifiedSvg.includes('viewBox')) {
+            modifiedSvg = modifiedSvg.replace('<svg', `<svg viewBox="0 0 ${image.width} ${image.height}"`);
+        }
+        
+        const svgImage = yield (0, canvas_1.loadImage)(`data:image/svg+xml;base64,${Buffer.from(modifiedSvg).toString('base64')}`);
+        svgCtx.drawImage(svgImage, 0, 0, image.width, image.height);
+        const pngBuffer = svgCanvas.toBuffer('image/png');
+        const pngPath = path.join(outputDir, `out-${imageNumber}.png`);
+        fs.writeFileSync(pngPath, pngBuffer);
 
         // Send success response with the file numbers
         res.json({ 
@@ -173,6 +190,7 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
             details: {
                 inputPath: `/input/in-${imageNumber}.png`,
                 outputPath: `/output/out-${imageNumber}.svg`,
+                outputPngPath: `/output/out-${imageNumber}.png`,
                 timestamp: new Date().toISOString()
             }
         });
