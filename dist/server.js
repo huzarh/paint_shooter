@@ -126,8 +126,24 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         const response = yield axios({
             method: 'GET',
             url: imageUrl,
-            responseType: 'arraybuffer'
+            responseType: 'arraybuffer',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive'
+            },
+            maxRedirects: 5,
+            validateStatus: function (status) {
+                return status >= 200 && status < 300; // Accept all 2xx status codes
+            }
         });
+
+        // Check if the response is actually an image
+        const contentType = response.headers['content-type'];
+        if (!contentType || !contentType.startsWith('image/')) {
+            throw new Error('URL does not point to a valid image');
+        }
 
         // Save the downloaded image
         const imageNumber = getNextFileNumber('in-', '.png');
