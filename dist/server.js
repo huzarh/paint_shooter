@@ -50,6 +50,7 @@ const canvas_1 = require("canvas");
 const common_1 = require("./common");
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
+const axios = require('axios');
 const app = express();
 const port = 8000;
 
@@ -58,6 +59,9 @@ app.use((req, res, next) => {
     console.log(`${req.method} ${req.url} - ${new Date().toISOString()}`);
     next();
 });
+
+// Add JSON parsing middleware
+app.use(express.json());
 
 // Add static file serving for the output directory
 const outputDir = path.join(__dirname, '../output');
@@ -70,19 +74,6 @@ if (!fs.existsSync(inputDir)) {
 }
 app.use('/output', express.static(outputDir));
 app.use('/input', express.static(inputDir));
-
-// Configure multer for handling file uploads
-const upload = multer({
-    storage: multer.diskStorage({
-        destination: function (req, file, cb) {
-            cb(null, inputDir);
-        },
-        filename: function (req, file, cb) {
-            const nextNumber = getNextFileNumber('in-', '.png');
-            cb(null, `in-${nextNumber}.png`);
-        }
-    })
-});
 
 // Function to get next available file number
 function getNextFileNumber(prefix, extension) {
@@ -119,15 +110,30 @@ function getNextSvgNumber() {
 
 const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        if (!req.file) {
+        const imageUrl = req.body.url;
+        if (!imageUrl) {
             res.status(400).json({ 
                 success: false, 
-                error: 'No image file provided',
-                details: 'Please upload an image file'
+                error: 'No image URL provided',
+                details: 'Please provide an image URL in the request body'
             });
             return;
         }
-        console.log('Received file:', req.file.originalname);
+
+        console.log('Processing image from URL:', imageUrl);
+
+        // Download image from URL
+        const response = yield axios({
+            method: 'GET',
+            url: imageUrl,
+            responseType: 'arraybuffer'
+        });
+
+        // Save the downloaded image
+        const imageNumber = getNextFileNumber('in-', '.png');
+        const imagePath = path.join(inputDir, `in-${imageNumber}.png`);
+        fs.writeFileSync(imagePath, response.data);
+
         // Create settings with default values
         const settings = new settings_1.Settings();
         settings.kMeansNrOfClusters = 16;
@@ -136,35 +142,37 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         settings.maximumNumberOfFacets = 100000;
         settings.nrOfTimesToHalveBorderSegments = 2;
         settings.narrowPixelStripCleanupRuns = 3;
+
         // Load and process the image
-        const image = yield (0, canvas_1.loadImage)(req.file.path);
+        const image = yield (0, canvas_1.loadImage)(imagePath);
         const canvas = (0, canvas_1.createCanvas)(image.width, image.height);
         const ctx = canvas.getContext('2d');
         if (!ctx) {
             throw new Error('Could not get canvas context');
         }
         ctx.drawImage(image, 0, 0);
+
         // Process the image
         const cancellationToken = new common_1.CancellationToken();
         const result = yield guiprocessmanager_1.GUIProcessManager.process(settings, cancellationToken, canvas, ctx);
+
         // Generate SVG
         const svg = yield guiprocessmanager_1.GUIProcessManager.createSVG(result.facetResult, result.colorsByIndex, 3,
             true, true, true, 50, "black", null);
 
         // Save SVG with sequential number
-        const svgNumber = getNextFileNumber('out-', '.svg');
-        const svgPath = path.join(outputDir, `out-${svgNumber}.svg`);
+        const svgPath = path.join(outputDir, `out-${imageNumber}.svg`);
         fs.writeFileSync(svgPath, typeof svg === 'string' ? svg : svg.outerHTML);
 
         // Send success response with the file numbers
         res.json({ 
             success: true, 
             message: 'SVG generated successfully',
-            inputFile: `in-${svgNumber}.png`,
-            outputFile: `out-${svgNumber}.svg`,
+            inputFile: `in-${imageNumber}.png`,
+            outputFile: `out-${imageNumber}.svg`,
             details: {
-                inputPath: `/input/in-${svgNumber}.png`,
-                outputPath: `/output/out-${svgNumber}.svg`,
+                inputPath: `/input/in-${imageNumber}.png`,
+                outputPath: `/output/out-${imageNumber}.svg`,
                 timestamp: new Date().toISOString()
             }
         });
@@ -262,7 +270,7 @@ app.get('/', (req, res) => {
     res.send(html);
 });
 
-app.post('/convert', upload.single('data'), convertHandler);
+app.post('/convert', convertHandler);
 
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
