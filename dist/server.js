@@ -52,6 +52,20 @@ const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const app = express();
 const port = 8000;
+
+// Add request logging middleware
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url} - ${new Date().toISOString()}`);
+    next();
+});
+
+// Add static file serving for the output directory
+const outputDir = path.join(__dirname, '../output');
+if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+}
+app.use('/output', express.static(outputDir));
+
 // Configure multer for handling file uploads
 const upload = multer({
     storage: multer.diskStorage({
@@ -67,11 +81,26 @@ const upload = multer({
         }
     })
 });
+
 // Create a temporary directory for processing
 const tempDir = path.join(__dirname, '../temp');
 if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
+
+// Function to get next available SVG number
+function getNextSvgNumber() {
+    const files = fs.readdirSync(outputDir);
+    const svgFiles = files.filter(file => file.startsWith('out-') && file.endsWith('.svg'));
+    if (svgFiles.length === 0) return 1;
+    
+    const numbers = svgFiles.map(file => {
+        const num = parseInt(file.replace('out-', '').replace('.svg', ''));
+        return isNaN(num) ? 0 : num;
+    });
+    return Math.max(...numbers) + 1;
+}
+
 const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         if (!req.file) {
@@ -99,26 +128,67 @@ const convertHandler = (req, res) => __awaiter(void 0, void 0, void 0, function*
         const cancellationToken = new common_1.CancellationToken();
         const result = yield guiprocessmanager_1.GUIProcessManager.process(settings, cancellationToken, canvas, ctx);
         // Generate SVG
-        const svg = yield guiprocessmanager_1.GUIProcessManager.createSVG(result.facetResult, result.colorsByIndex, 3, // sizeMultiplier
-        true, // fill
-        true, // stroke
-        true, // addColorLabels
-        50, // fontSize
-        "black", // fontColor
-        null // onUpdate
-        );
+        const svg = yield guiprocessmanager_1.GUIProcessManager.createSVG(result.facetResult, result.colorsByIndex, 3,
+            true, true, true, 50, "black", null);
+
+        // Save SVG with sequential number
+        const svgNumber = getNextSvgNumber();
+        const svgPath = path.join(outputDir, `out-${svgNumber}.svg`);
+        fs.writeFileSync(svgPath, typeof svg === 'string' ? svg : svg.outerHTML);
+
         // Clean up the uploaded file
         fs.unlinkSync(req.file.path);
-        // Send the SVG response
-        res.setHeader('Content-Type', 'image/svg+xml');
-        res.setHeader('Content-Disposition', 'attachment; filename=output.svg');
-        res.send(typeof svg === 'string' ? svg : svg.outerHTML);
+
+        // Send success response with the file number
+        res.json({ 
+            success: true, 
+            message: 'SVG generated successfully',
+            fileNumber: svgNumber
+        });
     }
     catch (error) {
         console.error('Error processing image:', error);
         res.status(500).json({ error: 'Error processing image' });
     }
 });
+
+// Add GET endpoint to list SVGs
+app.get('/', (req, res) => {
+    const files = fs.readdirSync(outputDir);
+    const svgFiles = files.filter(file => file.startsWith('out-') && file.endsWith('.svg'))
+        .sort((a, b) => {
+            const numA = parseInt(a.replace('out-', '').replace('.svg', ''));
+            const numB = parseInt(b.replace('out-', '').replace('.svg', ''));
+            return numA - numB;
+        });
+
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Generated SVGs</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .svg-container { margin: 20px 0; }
+                .svg-container img { max-width: 100%; border: 1px solid #ccc; }
+                h1 { color: #333; }
+            </style>
+        </head>
+        <body>
+            <h1>Generated SVGs</h1>
+            ${svgFiles.map(file => `
+                <div class="svg-container">
+                    <h2>${file}</h2>
+                    <img src="/output/${file}" alt="${file}">
+                </div>
+            `).join('')}
+        </body>
+        </html>
+    `;
+
+    res.send(html);
+});
+
 app.post('/convert', upload.single('image'), convertHandler);
 
 app.listen(port, () => {
