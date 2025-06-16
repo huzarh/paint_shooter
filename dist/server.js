@@ -80,14 +80,19 @@ app.use(express.json({
 // Add static file serving for the output directory
 const outputDir = path.join(__dirname, '../output');
 const inputDir = path.join(__dirname, '../input');
+const expoDir = path.join(__dirname, '../expo');
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
 }
 if (!fs.existsSync(inputDir)) {
     fs.mkdirSync(inputDir, { recursive: true });
 }
+if (!fs.existsSync(expoDir)) {
+    fs.mkdirSync(expoDir, { recursive: true });
+}
 app.use('/output', express.static(outputDir));
 app.use('/input', express.static(inputDir));
+app.use('/expo', express.static(expoDir));
 
 // Function to get next available file number
 function getNextFileNumber(prefix, extension) {
