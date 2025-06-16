@@ -262,7 +262,7 @@ app.get('/', (req, res) => {
     res.send(html);
 });
 
-app.post('/convert', upload.single('image'), convertHandler);
+app.post('/convert', upload.single('data'), convertHandler);
 
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
